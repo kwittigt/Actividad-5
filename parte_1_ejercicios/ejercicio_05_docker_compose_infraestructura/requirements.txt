@@ -1,0 +1,14 @@
+# Conexión a PostgreSQL
+psycopg2-binary==2.9.9
+sqlalchemy==2.0.30
+
+# Análisis de datos (scipy/numpy/matplotlib vienen en la imagen base)
+pandas==2.2.2
+seaborn==0.13.2
+
+# Generación de datos sintéticos
+faker==25.2.0
+
+# Utilidades
+tabulate==0.9.0
+python-dotenv==1.0.1

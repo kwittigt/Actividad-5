@@ -1,0 +1,140 @@
+version: '3.9'
+
+# =============================================================
+#  Mini Infraestructura de Ciencia de Datos — Docker Compose
+#  Servicios: PostgreSQL · JupyterLab · pgAdmin
+#  Red interna: ds_network (bridge)
+#  Volúmenes persistentes: postgres_data · notebooks_data
+#                          datasets_data · pgadmin_data
+# =============================================================
+
+services:
+
+  # -----------------------------------------------------------
+  # 1. BASE DE DATOS — PostgreSQL 15
+  #    Puerto externo : 5432  →  interno : 5432
+  #    Volumen        : postgres_data (datos persistentes)
+  #    Red            : ds_network
+  # -----------------------------------------------------------
+  postgres:
+    image: postgres:15-alpine
+    container_name: ds_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-dsuser}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-dspassword}
+      POSTGRES_DB: ${DB_NAME:-dsdb}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - ds_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-dsuser} -d ${DB_NAME:-dsdb}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # -----------------------------------------------------------
+  # 2. ENTORNO PYTHON — JupyterLab
+  #    Puerto externo : 8888  →  interno : 8888
+  #    Volúmenes      : notebooks_data, datasets_data, ./scripts
+  #    Depende de     : postgres (healthcheck OK)
+  #    Red            : ds_network
+  # -----------------------------------------------------------
+  jupyter:
+    build:
+      context: ./jupyter
+      dockerfile: Dockerfile
+    container_name: ds_jupyter
+    restart: unless-stopped
+    environment:
+      JUPYTER_ENABLE_LAB: "yes"
+      JUPYTER_TOKEN: ${JUPYTER_TOKEN:-datascience2024}
+      # Variables de conexión a la base de datos (usadas por los scripts)
+      DB_HOST: postgres          # nombre del servicio = hostname interno
+      DB_PORT: 5432
+      DB_USER: ${DB_USER:-dsuser}
+      DB_PASSWORD: ${DB_PASSWORD:-dspassword}
+      DB_NAME: ${DB_NAME:-dsdb}
+    ports:
+      - "8888:8888"
+    volumes:
+      - notebooks_data:/home/jovyan/work          # notebooks persistentes
+      - datasets_data:/home/jovyan/datasets       # datasets generados
+      - ./scripts:/home/jovyan/scripts:ro         # scripts de carga/análisis
+    networks:
+      - ds_network
+    depends_on:
+      postgres:
+        condition: service_healthy               # espera que PG esté listo
+
+  # -----------------------------------------------------------
+  # 3. INTERFAZ WEB — pgAdmin 4
+  #    Puerto externo : 5050  →  interno : 80
+  #    Volumen        : pgadmin_data
+  #    Depende de     : postgres
+  #    Red            : ds_network
+  # -----------------------------------------------------------
+  pgadmin:
+    image: dpage/pgadmin4:8
+    container_name: ds_pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@ds.local}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-adminpass}
+      PGADMIN_CONFIG_SERVER_MODE: "False"         # modo desktop (sin login forzado)
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    networks:
+      - ds_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+# =============================================================
+#  VOLÚMENES PERSISTENTES
+#  Declarados aquí → Docker los crea y gestiona en el host.
+#  Los datos sobreviven a `docker compose down`.
+#  Solo se borran con `docker compose down -v`.
+# =============================================================
+volumes:
+  postgres_data:
+    driver: local
+    labels:
+      project: "ds-ejercicio5"
+      service: "postgres"
+  notebooks_data:
+    driver: local
+    labels:
+      project: "ds-ejercicio5"
+      service: "jupyter"
+  datasets_data:
+    driver: local
+    labels:
+      project: "ds-ejercicio5"
+      service: "shared"
+  pgadmin_data:
+    driver: local
+    labels:
+      project: "ds-ejercicio5"
+      service: "pgadmin"
+
+# =============================================================
+#  RED INTERNA
+#  driver: bridge → red virtual privada; los contenedores se
+#  resuelven entre sí por nombre de servicio (DNS interno).
+#  Nada externo accede a esta red salvo por los puertos expuestos.
+# =============================================================
+networks:
+  ds_network:
+    driver: bridge
+    name: ds_network
+    labels:
+      project: "ds-ejercicio5"
