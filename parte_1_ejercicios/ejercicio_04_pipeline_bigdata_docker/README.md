@@ -1,195 +1,155 @@
-# Pipeline Big Data Local — INFB6074
-## E-commerce Analytics: Bronze → Silver → Gold
+# Pipeline Big Data local con Docker
 
-Pipeline reproducible de datos para análisis de ventas e-commerce, implementado con Python 3.11, Docker y Parquet columnar.
+Este ejercicio implementa un pipeline de datos para un caso de e-commerce. La idea es simular dos fuentes de informacion, procesarlas por capas y dejar resultados listos para analisis: datos crudos, datos limpios, tablas agregadas, metricas de calidad, consultas y un pequeno registro de linaje.
 
----
+El proyecto esta pensado para poder ejecutarse localmente con Python o dentro de Docker, manteniendo las mismas versiones de librerias.
 
-## Escenario
+## Que hace el pipeline
 
-Se simula una plataforma de comercio electrónico latinoamericana con operaciones en Chile, Argentina, México, Colombia, Perú y Brasil. Dos fuentes de datos alimentan el sistema:
+El flujo completo se ejecuta desde `pipeline/main.py` y sigue estos pasos:
 
-| Fuente | Formato | Registros | Descripción |
-|--------|---------|-----------|-------------|
-| `transacciones.csv` | CSV | 5 000 | Ventas: monto, producto, categoría, método de pago, estado |
-| `eventos.jsonl` | JSONL | 8 000 | Clickstream: tipo de evento, sesión, dispositivo, duración |
+1. Genera datos sinteticos de transacciones y eventos web.
+2. Carga las fuentes originales en la zona `bronze/`.
+3. Aplica reglas de calidad y guarda datos limpios en `silver/`.
+4. Construye tablas analiticas en `gold/`.
+5. Ejecuta consultas con DuckDB, Pandas y Polars.
+6. Genera reportes, dashboard, catalogo de datos y linaje.
 
----
+Las fuentes simuladas son:
+
+| Archivo | Formato | Descripcion |
+| --- | --- | --- |
+| `data/seeds/transacciones.csv` | CSV | Ventas del e-commerce: usuario, producto, categoria, monto, estado, pais y metodo de pago. |
+| `data/seeds/eventos.jsonl` | JSONL | Eventos de navegacion: sesiones, tipo de evento, dispositivo, navegador y duracion. |
 
 ## Estructura del proyecto
 
-```
+```text
 .
-├── Dockerfile                  # Imagen reproducible Python 3.11.9
-├── requirements.txt            # Dependencias con versiones fijas
-├── README.md
-│
-├── data/
-│   ├── generador.py            # Genera datos sintéticos con errores intencionales
-│   └── seeds/
-│       ├── transacciones.csv
-│       └── eventos.jsonl
-│
-├── pipeline/
-│   ├── main.py                 # Orquestador principal
-│   ├── ingesta.py              # Zona Bronze
-│   ├── calidad.py              # Zona Silver + 8 reglas de calidad
-│   ├── transformacion.py       # Zona Gold (3 tablas analíticas)
-│   ├── consultas.py            # 5 consultas DuckDB / Pandas / Polars
-│   ├── catalogo.py             # Generador del catálogo de datos
-│   └── linaje.py               # Registro de linaje JSONL
-│
-├── bronze/                     # Datos crudos (Parquet sin transformar)
-├── silver/                     # Datos limpios, particionados por year/month
-├── gold/                       # Tablas analíticas agregadas
-├── metadata/
-│   ├── catalogo.json           # Catálogo de campos y reglas
-│   └── linaje.jsonl            # Registro de cada transformación
-└── metrics/
-    ├── reporte_calidad.json    # Estadísticas por regla
-    ├── dashboard_analitico.png # 6 visualizaciones analíticas
-    └── query_*.parquet         # Resultados de consultas
+|-- Dockerfile
+|-- requirements.txt
+|-- README.md
+|-- data/
+|   |-- generador.py
+|   `-- seeds/
+|       |-- transacciones.csv
+|       `-- eventos.jsonl
+|-- pipeline/
+|   |-- main.py
+|   |-- ingesta.py
+|   |-- calidad.py
+|   |-- transformacion.py
+|   |-- consultas.py
+|   |-- catalogo.py
+|   `-- linaje.py
+|-- bronze/
+|-- silver/
+|-- gold/
+|-- metadata/
+|-- metrics/
+`-- logs/
 ```
 
----
+En resumen:
 
-## Ejecución
+- `data/` contiene el generador y los archivos de entrada.
+- `pipeline/` contiene el codigo del proceso.
+- `bronze/`, `silver/` y `gold/` son las zonas de datos.
+- `metadata/` guarda el catalogo y el linaje.
+- `metrics/` guarda reportes, consultas y el dashboard.
+- `logs/` guarda salidas de ejecucion.
 
-### Con Docker (reproducible)
+## Modulos principales
+
+`pipeline/main.py` es el orquestador. No hace las transformaciones directamente; llama a cada modulo en orden para que el flujo sea mas facil de seguir.
+
+`data/generador.py` crea los datos de prueba. Incluye algunos errores intencionales para que la etapa de calidad tenga casos reales que validar, como valores nulos, duplicados, rangos invalidos o fechas futuras.
+
+`pipeline/ingesta.py` representa la capa Bronze. Lee los archivos CSV y JSONL, agrega columnas tecnicas como `_ingested_at` y `_source_file`, guarda Parquet en `bronze/` y conserva una copia raw en `bronze/raw/`.
+
+`pipeline/calidad.py` representa la capa Silver. Convierte tipos, valida los datos y elimina registros que no cumplen reglas basicas de calidad. Tambien genera `metrics/reporte_calidad.json`.
+
+`pipeline/transformacion.py` representa la capa Gold. A partir de los datos limpios construye tres salidas analiticas:
+
+- `ventas_categoria_mes`: ventas agregadas por categoria, pais, anio y mes.
+- `perfil_usuarios`: resumen tipo RFM por usuario.
+- `conversion_funnel`: embudo de conversion por sesiones.
+
+`pipeline/consultas.py` ejecuta consultas analiticas usando distintas herramientas. DuckDB se usa para SQL sobre Parquet, Pandas para segmentacion RFM y Polars para procesamiento columnar. Tambien genera el dashboard en `metrics/dashboard_analitico.png`.
+
+`pipeline/catalogo.py` genera `metadata/catalogo.json`, con descripcion de campos, reglas y tablas del pipeline.
+
+`pipeline/linaje.py` registra eventos en `metadata/linaje.jsonl`, dejando trazabilidad simple de origen, transformacion, destino, script y cantidad de filas.
+
+## Reglas de calidad aplicadas
+
+La etapa Silver valida principalmente:
+
+| Regla | Que revisa | Accion |
+| --- | --- | --- |
+| R01 | Campos obligatorios nulos | Elimina registros invalidos |
+| R02 | Claves primarias duplicadas | Conserva el primer registro |
+| R03 | Rangos invalidos, como montos menores o iguales a cero | Elimina registros invalidos |
+| R04 | Categorias, metodos de pago, eventos o dispositivos no permitidos | Elimina registros invalidos |
+| R05 | Fechas futuras | Elimina registros invalidos |
+| R06 | Usuarios de eventos que no existen en transacciones | Elimina registros invalidos |
+| R07 | Formato incorrecto de identificadores | Elimina registros invalidos |
+| R08 | Outliers extremos en monto | Los registra en el reporte |
+
+## Como ejecutar
+
+### Opcion 1: con Docker
+
+Desde la carpeta del ejercicio:
 
 ```bash
-# Construir la imagen con versión fija de Python y dependencias
 docker build -t infb6074-pipeline .
-
-# Ejecutar el pipeline completo (monta el directorio actual)
 docker run --rm -v "$(pwd)":/work infb6074-pipeline
 ```
 
-### Sin Docker (local)
+Esta opcion es la mas reproducible porque usa la imagen `python:3.11.9-slim` y las versiones fijadas en `requirements.txt`.
+
+### Opcion 2: local con Python
 
 ```bash
 pip install -r requirements.txt
 python pipeline/main.py
 ```
 
----
+Tambien se puede cambiar la cantidad de datos generados:
 
-## Zonas del pipeline
-
-### Bronze — Ingesta cruda
-- Lee `transacciones.csv` y `eventos.jsonl` sin transformar.
-- Agrega metadatos: `_ingested_at`, `_source_file`.
-- Guarda en `bronze/` como Parquet plano.
-- Conserva copia raw en `bronze/raw/` para trazabilidad.
-
-### Silver — Calidad y limpieza
-
-Se aplican **8 reglas de calidad**:
-
-| ID | Regla | Acción |
-|----|-------|--------|
-| R01 | Nulos en campos obligatorios | Eliminar fila |
-| R02 | Duplicados en clave primaria | Eliminar duplicados (keep=first) |
-| R03 | Rangos inválidos (amount > 0, quantity ≥ 1, duration_sec ≥ 0) | Eliminar fila |
-| R04 | Categorías / métodos de pago / tipos de evento no permitidos | Eliminar fila |
-| R05 | Fechas o timestamps futuros | Eliminar fila |
-| R06 | Integridad referencial: user_id en eventos ∉ user_ids en transacciones | Eliminar fila |
-| R07 | Formato de identificador (TXN-XXXXXX / EVT-XXXXXXX) | Eliminar fila |
-| R08 | Outliers estadísticos en amount (> Q3 + 3·IQR) | Solo registrar |
-
-Los datos limpios se guardan **particionados por `year` y `month`** en `silver/`.
-
-### Gold — Tablas analíticas
-
-| Tabla | Descripción | Partición |
-|-------|-------------|-----------|
-| `ventas_categoria_mes` | Ingresos, unidades y transacciones por categoría, país y mes | year / month |
-| `perfil_usuarios` | Perfil RFM-like: compras, gasto, eventos, sesiones por usuario | — |
-| `conversion_funnel` | Embudo de conversión: page_view → search → click → add_to_cart → purchase | — |
-
----
-
-## Consultas analíticas
-
-| # | Motor | Consulta |
-|---|-------|----------|
-| 1 | **DuckDB** | Top categorías por ingresos totales |
-| 2 | **DuckDB** | Serie temporal mensual con ingresos acumulados (window function) |
-| 3 | **Pandas** | Segmentación RFM (Recency, Frequency, Monetary) con quintiles |
-| 4 | **Polars** | Comportamiento por dispositivo y navegador (lazy evaluation) |
-| 5 | **DuckDB** | Análisis geográfico con % de participación por país |
-
----
-
-## Catálogo de datos
-
-El archivo `metadata/catalogo.json` documenta cada campo con:
-
-```json
-{
-  "campo": "amount",
-  "tipo": "float",
-  "descripcion": "Monto total de la transacción en USD",
-  "fuente": "sistema_pos",
-  "obligatorio": true,
-  "rango": "> 0",
-  "reglas": ["R01 (no nulo)", "R03a (amount > 0)", "R08 (sin outliers extremos)"]
-}
+```bash
+python pipeline/main.py --transacciones 5000 --eventos 8000 --seed 42
 ```
 
----
+## Salidas esperadas
 
-## Linaje de datos
+Despues de ejecutar el pipeline deberian aparecer o actualizarse estos archivos:
 
-El archivo `metadata/linaje.jsonl` registra cada transformación:
+| Ruta | Contenido |
+| --- | --- |
+| `bronze/*.parquet` | Datos crudos convertidos a Parquet. |
+| `silver/` | Datos limpios particionados por `year` y `month`. |
+| `gold/` | Tablas analiticas finales. |
+| `metrics/reporte_calidad.json` | Resumen de reglas de calidad y filas rechazadas. |
+| `metrics/query_*.parquet` | Resultados de consultas analiticas. |
+| `metrics/dashboard_analitico.png` | Dashboard con graficos principales. |
+| `metadata/catalogo.json` | Catalogo de datos del pipeline. |
+| `metadata/linaje.jsonl` | Registro de transformaciones ejecutadas. |
 
-```json
-{
-  "timestamp_utc": "2024-01-01T00:00:00+00:00",
-  "origen": "bronze/transacciones.parquet",
-  "transformacion": "validacion_calidad_R01-R08",
-  "destino": "silver/transacciones",
-  "script_responsable": "pipeline/calidad.py",
-  "filas_entrada": 5000,
-  "filas_salida": 4591,
-  "filas_eliminadas": 409,
-  "notas": "8 reglas aplicadas; particionado por year/month"
-}
-```
+Si aparecen archivos con nombre `*_historico.*`, corresponden a resultados guardados de ejecuciones anteriores.
 
----
+## Dependencias usadas
 
-## Docker y reproducibilidad
+Las librerias principales son:
 
-Docker aporta tres garantías fundamentales a este pipeline:
+- `pandas` y `numpy` para transformaciones de datos.
+- `pyarrow` para leer y escribir Parquet.
+- `duckdb` para consultas SQL directamente sobre archivos Parquet.
+- `polars` para consultas columnares.
+- `matplotlib` y `seaborn` para visualizaciones.
+- `rich` para mostrar tablas y mensajes mas legibles en consola.
 
-### 1. Reproducibilidad
-El `Dockerfile` fija `python:3.11.9-slim` y el `requirements.txt` fija cada dependencia con versión exacta (`pandas==2.2.2`, `duckdb==1.0.0`, etc.). Esto garantiza que el pipeline produce **exactamente el mismo resultado** en cualquier máquina, en cualquier fecha.
+## Comentario final
 
-### 2. Aislamiento de dependencias
-El contenedor tiene su propio entorno Python aislado del sistema operativo del host. No hay conflictos entre versiones de librerías de distintos proyectos.
-
-### 3. Comparación controlada
-Al cambiar las reglas de calidad o la lógica de transformación, se puede construir una nueva imagen (`v2.0`) y correrla en paralelo con la anterior sobre los mismos datos, comparando resultados de forma controlada sin alterar el entorno de producción.
-
----
-
-## Métricas de ejecución (ejemplo)
-
-| Dataset | Filas entrada | Filas limpias | Tasa de rechazo |
-|---------|-------------|---------------|-----------------|
-| Transacciones | 5 000 | ~4 591 | ~8.2% |
-| Eventos | 8 000 | ~7 316 | ~8.5% |
-
----
-
-## Dependencias principales
-
-```
-pandas==2.2.2       # ETL y operaciones vectorizadas
-pyarrow==16.1.0     # Backend Parquet + formato Arrow
-duckdb==1.0.0       # SQL analítico sobre Parquet directamente
-polars==0.20.31     # Procesamiento columnar con lazy evaluation
-matplotlib==3.9.0   # Visualizaciones
-rich==13.7.1        # Output formateado en consola
-```
+Este proyecto no busca ser un sistema productivo grande, sino una version local y entendible de un pipeline de Big Data. La gracia esta en mostrar el recorrido completo del dato: nace como fuente cruda, pasa por controles de calidad, se transforma en tablas utiles y finalmente queda documentado con metricas, catalogo y linaje.
