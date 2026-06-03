@@ -1,208 +1,218 @@
-# Ejercicio 5 — Mini Infraestructura con Docker Compose para Ciencia de Datos
+# Mini infraestructura de datos con Docker Compose
 
-## Arquitectura
+Este ejercicio arma una pequena infraestructura local para trabajar con datos usando Docker Compose. La idea es levantar varios servicios que normalmente se usan en un entorno de ciencia de datos: una base PostgreSQL, un JupyterLab para ejecutar codigo Python y pgAdmin para revisar la base desde una interfaz web.
 
-```
-┌─────────────────────────────────────────────────────┐
-│                     HOST (tu máquina)               │
-│                                                     │
-│  :8888 ──► [JupyterLab]  ──┐                        │
-│  :5432 ──► [PostgreSQL]    ├── ds_network (bridge)  │
-│  :5050 ──► [pgAdmin]     ──┘                        │
-│                                                     │
-│  Volúmenes:                                         │
-│   postgres_data  → datos persistentes de PG         │
-│   notebooks_data → notebooks de Jupyter             │
-│   datasets_data  → CSVs y reportes generados        │
-│   pgadmin_data   → config de pgAdmin                │
-└─────────────────────────────────────────────────────┘
-```
+El caso de prueba es un sistema simple de ventas. Primero se inicializa una base de datos con tablas e indices, despues se cargan datos sinteticos y finalmente se ejecutan consultas para generar un reporte de analisis.
 
----
+## Que contiene el proyecto
 
-## Servicios, puertos y variables de entorno
-
-| Servicio   | Imagen               | Puerto host | Puerto interno | Variables clave                                         |
-|------------|----------------------|-------------|----------------|---------------------------------------------------------|
-| `postgres` | postgres:15-alpine   | 5432        | 5432           | `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`    |
-| `jupyter`  | (build local)        | 8888        | 8888           | `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `JUPYTER_TOKEN` |
-| `pgadmin`  | dpage/pgadmin4:8     | 5050        | 80             | `PGADMIN_DEFAULT_EMAIL`, `PGADMIN_DEFAULT_PASSWORD`     |
-
-> Las variables están centralizadas en el archivo `.env` para no repetirlas en el YAML.
-
----
-
-## Estructura del proyecto
-
-```
-ejercicio5/
-├── docker-compose.yml          ← orquestación principal
-├── .env                        ← variables de entorno
-├── postgres/
-│   └── init.sql                ← esquema + tablas + vistas (auto-ejecutado al crear el volumen)
-├── jupyter/
-│   ├── Dockerfile              ← imagen Python personalizada
-│   └── requirements.txt        ← dependencias pip
-└── scripts/
-    ├── load_data.py            ← genera dataset sintético y lo carga en PG
-    └── query_analysis.py       ← corre consultas SQL + análisis Pandas → reporte .txt
+```text
+.
+|-- docker-compose.yml
+|-- Dockerfile
+|-- requirements.txt
+|-- init.sql
+|-- load_data.py
+|-- query_analysis.py
+|-- .env
+`-- README.md
 ```
 
----
+Cada archivo cumple una parte del ejercicio:
 
-## Comandos de ejecución
+- `docker-compose.yml`: define los servicios, red interna, volumenes persistentes y variables de entorno.
+- `Dockerfile`: crea la imagen de Jupyter con las dependencias necesarias para conectarse a PostgreSQL y analizar datos.
+- `requirements.txt`: lista las librerias Python que se instalan dentro del contenedor de Jupyter.
+- `init.sql`: crea el esquema `ventas`, las tablas, los indices y una vista de reporte diario.
+- `load_data.py`: genera productos y transacciones sinteticas, las carga en PostgreSQL y exporta una muestra CSV.
+- `query_analysis.py`: ejecuta consultas SQL, arma tablas de analisis con Pandas y guarda un reporte de texto.
+- `.env`: guarda las credenciales y configuraciones usadas por Docker Compose.
 
-### 1. Levantar toda la infraestructura
+## Servicios de la infraestructura
+
+La infraestructura queda compuesta por tres servicios:
+
+| Servicio | Para que sirve | Puerto |
+| --- | --- | --- |
+| `postgres` | Base de datos principal del ejercicio. | `5432` |
+| `jupyter` | Entorno Python/JupyterLab para correr scripts y notebooks. | `8888` |
+| `pgadmin` | Interfaz web para administrar PostgreSQL. | `5050` |
+
+Los contenedores se conectan entre si por una red interna llamada `ds_network`. Dentro de esa red, Jupyter y pgAdmin se conectan a la base usando el nombre del servicio: `postgres`.
+
+## Variables principales
+
+Las variables estan en `.env` para no repetirlas dentro del `docker-compose.yml`.
+
+```env
+DB_USER=dsuser
+DB_PASSWORD=dspassword
+DB_NAME=dsdb
+JUPYTER_TOKEN=datascience2024
+PGADMIN_EMAIL=admin@ds.local
+PGADMIN_PASSWORD=adminpass
+```
+
+Estas credenciales son solo para desarrollo local. En un entorno real no convendria dejarlas asi en texto plano.
+
+## Base de datos
+
+El archivo `init.sql` se ejecuta automaticamente cuando PostgreSQL crea el volumen por primera vez. Ahi se define el esquema `ventas` con dos tablas:
+
+- `ventas.productos`: guarda el catalogo de productos, categoria y precio unitario.
+- `ventas.transacciones`: guarda ventas con producto, cantidad, fecha, region, canal y total.
+
+Tambien se crean indices para acelerar busquedas por fecha, producto y region. Al final se define la vista `ventas.reporte_diario`, que resume ventas por fecha, categoria, region y canal.
+
+## Script de carga
+
+`load_data.py` genera datos sinteticos de ventas. El script:
+
+1. Espera hasta que PostgreSQL este disponible.
+2. Inserta una lista base de productos.
+3. Genera 2.000 transacciones aleatorias durante el anio 2024.
+4. Guarda las transacciones en `ventas.transacciones`.
+5. Exporta una muestra de datos en `/home/jovyan/datasets/ventas_muestra.csv`.
+
+La carga esta pensada para no duplicar datos si ya existen productos o transacciones en la base.
+
+## Script de analisis
+
+`query_analysis.py` se ejecuta despues de cargar los datos. Consulta PostgreSQL y genera un reporte con:
+
+- resumen general de ventas;
+- ingresos por categoria;
+- ventas por region;
+- ventas por canal;
+- top 5 productos por ingresos;
+- tendencia mensual;
+- ventas por dia de la semana;
+- tabla pivot de ingresos por region y canal.
+
+El resultado se guarda en:
+
+```text
+/home/jovyan/datasets/reporte.txt
+```
+
+Esa ruta vive dentro del volumen `datasets_data`, por lo que el reporte se mantiene aunque se apaguen los contenedores.
+
+## Como ejecutar
+
+Desde la carpeta del ejercicio:
 
 ```bash
 docker compose up --build
-# --build reconstruye la imagen de Jupyter si cambió el Dockerfile o requirements.txt
 ```
 
-### 2. Verificar que los servicios están corriendo
+En otra terminal se puede revisar que todo este arriba:
 
 ```bash
 docker compose ps
 ```
 
-Salida esperada:
-```
-NAME           IMAGE                  STATUS          PORTS
-ds_jupyter     ejercicio5-jupyter     Up              0.0.0.0:8888->8888/tcp
-ds_pgadmin     dpage/pgadmin4:8       Up              0.0.0.0:5050->80/tcp
-ds_postgres    postgres:15-alpine     Up (healthy)    0.0.0.0:5432->5432/tcp
-```
-
-### 3. Cargar el dataset
+Luego se carga la informacion:
 
 ```bash
 docker compose exec jupyter python /home/jovyan/scripts/load_data.py
 ```
 
-### 4. Ejecutar el análisis
+Y se ejecuta el analisis:
 
 ```bash
 docker compose exec jupyter python /home/jovyan/scripts/query_analysis.py
 ```
 
-### 5. Verificar persistencia del volumen
+Para ver el reporte:
 
 ```bash
-# El reporte queda en el volumen datasets_data
 docker compose exec jupyter cat /home/jovyan/datasets/reporte.txt
 ```
 
-### 6. Ver logs de un servicio
+## Acceso web
+
+| Herramienta | URL | Acceso |
+| --- | --- | --- |
+| JupyterLab | `http://localhost:8888` | token `datascience2024` |
+| pgAdmin | `http://localhost:5050` | `admin@ds.local` / `adminpass` |
+
+Para registrar la base en pgAdmin:
+
+1. Abrir `http://localhost:5050`.
+2. Iniciar sesion con las credenciales de `.env`.
+3. Crear un servidor nuevo.
+4. Usar `postgres` como host.
+5. Usar puerto `5432`, base `dsdb`, usuario `dsuser` y clave `dspassword`.
+
+Es importante usar `postgres` como host, porque dentro de Docker Compose los servicios se encuentran por nombre. `localhost` apuntaria al contenedor de pgAdmin, no al contenedor de PostgreSQL.
+
+## Comandos utiles
+
+Ver logs:
 
 ```bash
-docker compose logs postgres    # logs de PostgreSQL
-docker compose logs jupyter     # logs de Jupyter (incluye el token de acceso)
-docker compose logs -f          # todos los servicios, en tiempo real
+docker compose logs postgres
+docker compose logs jupyter
+docker compose logs -f
 ```
 
-### 7. Conectarse a PostgreSQL directamente
+Entrar a PostgreSQL:
 
 ```bash
 docker compose exec postgres psql -U dsuser -d dsdb
 ```
 
-Dentro de psql:
+Consultas rapidas dentro de `psql`:
+
 ```sql
--- Verificar tablas
 \dt ventas.*
-
--- Contar registros
 SELECT COUNT(*) FROM ventas.transacciones;
-
--- Ver la vista de reporte diario
 SELECT * FROM ventas.reporte_diario LIMIT 10;
 ```
 
-### 8. Bajar la infraestructura
+Apagar los contenedores sin borrar datos:
 
 ```bash
-docker compose down          # detiene y elimina contenedores; los VOLÚMENES se conservan
-docker compose down -v       # elimina también los volúmenes (BORRA TODOS LOS DATOS)
-```
-
----
-
-## Evidencia de persistencia
-
-Los volúmenes de Docker son directorios gestionados en el host (`/var/lib/docker/volumes/`).  
-Para verificar que persisten datos después de detener los contenedores:
-
-```bash
-# 1. Bajar sin -v (conserva volúmenes)
 docker compose down
-
-# 2. Subir de nuevo SIN --build
-docker compose up
-
-# 3. Los datos siguen ahí
-docker compose exec jupyter python /home/jovyan/scripts/query_analysis.py
-# → imprime el reporte con los mismos datos sin volver a cargar
 ```
 
----
+Apagar y borrar volumenes:
 
-## Acceso a las interfaces web
-
-| Interfaz   | URL                          | Credencial                               |
-|------------|------------------------------|------------------------------------------|
-| JupyterLab | http://localhost:8888        | Token: `datascience2024`                 |
-| pgAdmin    | http://localhost:5050        | admin@ds.local / adminpass               |
-
-### Configurar pgAdmin (primera vez)
-
-1. Abrir http://localhost:5050
-2. Click en *Add New Server*
-3. En **General**: nombre `ds_postgres`
-4. En **Connection**:
-   - Host: `postgres` *(nombre del servicio, no localhost)*
-   - Port: `5432`
-   - Database: `dsdb`
-   - Username: `dsuser`
-   - Password: `dspassword`
-
-> **Nota clave**: dentro de la red `ds_network`, los contenedores se resuelven entre sí  
-> por **nombre de servicio**. Desde pgAdmin o Jupyter, el host de PostgreSQL es `postgres`, no `localhost`.
-
----
-
-## Dependencias entre servicios
-
-```
-postgres ──(healthcheck OK)──► jupyter
-postgres ──(healthcheck OK)──► pgadmin
+```bash
+docker compose down -v
 ```
 
-El servicio `jupyter` usa `depends_on` con `condition: service_healthy`,  
-lo que garantiza que no intenta conectarse a PostgreSQL antes de que esté listo.
+El segundo comando elimina los datos persistentes, asi que conviene usarlo solo cuando se quiera reiniciar el ejercicio desde cero.
 
----
+## Volumenes y persistencia
 
-## ¿Qué resuelve Docker Compose en este ejercicio?
+El compose declara cuatro volumenes:
 
-| Problema                          | ¿Lo resuelve? | Cómo                                              |
-|-----------------------------------|:-------------:|---------------------------------------------------|
-| Reproducibilidad del entorno      | ✅            | Imagen fija + requirements.txt versionado         |
-| Comunicación entre servicios      | ✅            | Red bridge interna `ds_network`                   |
-| Persistencia de datos             | ✅            | Volúmenes nombrados que sobreviven a `down`       |
-| Configuración sin hardcoding      | ✅            | Variables de entorno en `.env`                    |
-| Arranque ordenado de servicios    | ✅            | `depends_on` + healthcheck                        |
-| Aislamiento del entorno local     | ✅            | Los servicios no modifican el sistema anfitrión   |
+| Volumen | Uso |
+| --- | --- |
+| `postgres_data` | Datos internos de PostgreSQL. |
+| `notebooks_data` | Archivos creados dentro de Jupyter. |
+| `datasets_data` | CSVs y reportes generados por los scripts. |
+| `pgadmin_data` | Configuracion de pgAdmin. |
 
-## ¿Qué NO resuelve Docker Compose?
+Gracias a estos volumenes, los datos no se pierden al ejecutar `docker compose down`. Solo se eliminan si se usa `docker compose down -v`.
 
-| Problema                              | Razón                                                                 |
-|---------------------------------------|-----------------------------------------------------------------------|
-| **Escalabilidad distribuida**         | Compose es mono-host; para múltiples nodos se usa Kubernetes o Swarm |
-| **Alta disponibilidad / failover**    | No hay réplicas ni balanceador de carga                               |
-| **Seguridad de producción**           | Credenciales en `.env`, sin TLS interno, sin gestión de secretos      |
-| **Monitoreo y alertas**              | No incluye Prometheus/Grafana ni sistema de métricas                  |
-| **Gobierno de datos**                 | No hay control de acceso granular, auditoría ni linaje de datos        |
-| **Backup automático**                 | Los volúmenes se pueden perder con `down -v`; no hay backup policy    |
+## Nota sobre la estructura actual
 
-> Docker Compose es una **herramienta de desarrollo local y prototipado**, no un sustituto  
-> de plataformas de orquestación empresarial (Kubernetes, Airflow, MLflow, etc.).
+En la carpeta actual los archivos estan en la raiz. Si `docker-compose.yml` apunta a rutas como `./jupyter`, `./postgres` o `./scripts`, esas carpetas deben existir o se deben ajustar las rutas del compose. La idea original es:
+
+```text
+jupyter/Dockerfile
+jupyter/requirements.txt
+postgres/init.sql
+scripts/load_data.py
+scripts/query_analysis.py
+```
+
+Si se mantiene la estructura plana, el compose debe cambiarse para apuntar directamente a `./Dockerfile`, `./requirements.txt`, `./init.sql`, `./load_data.py` y `./query_analysis.py`.
+
+## Que demuestra este ejercicio
+
+Este ejercicio muestra como Docker Compose ayuda a levantar un entorno completo sin instalar PostgreSQL, Jupyter y pgAdmin manualmente en el computador. Tambien permite practicar conceptos importantes: variables de entorno, redes internas, volumenes persistentes, healthchecks, carga de datos y analisis reproducible.
+
+No es una infraestructura de produccion. No tiene alta disponibilidad, backups automaticos, secretos seguros ni monitoreo avanzado. Es un entorno local para aprender y probar una arquitectura pequena de datos.
